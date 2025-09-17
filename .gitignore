@@ -1,0 +1,44 @@
+# ROS2 build artifacts
+build/
+install/
+log/
+
+# Colcon symlink install
+**/install/setup.*
+
+# CMake build system
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+
+# Qt related build
+*.pro.user
+*.qmake.stash
+*.qmake.cache
+*.moc
+*.o
+*.obj
+*.so
+*.dll
+*.dylib
+*.a
+
+# Qt UI auto-generated
+ui_*.h
+moc_*.cpp
+qrc_*.cpp
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+.DS_Store
+Thumbs.db
