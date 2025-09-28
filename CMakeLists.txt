@@ -13,6 +13,7 @@ find_package(sensor_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(cv_bridge REQUIRED)        
 find_package(image_transport REQUIRED) 
+find_package(tf2_ros REQUIRED)
 
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
@@ -30,10 +31,14 @@ ament_target_dependencies(realsense_bridge
   image_transport
   std_msgs
 )
+add_executable(static_tf_bridge src/static_tf_bridge.cpp)
+ament_target_dependencies(static_tf_bridge rclcpp geometry_msgs tf2_ros )
+
 
 install(TARGETS
   cmd_vel_bridge
   realsense_bridge 
+  static_tf_bridge
   DESTINATION lib/${PROJECT_NAME}
   )
 
