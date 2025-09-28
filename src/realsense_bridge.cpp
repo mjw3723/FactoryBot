@@ -13,12 +13,12 @@ public:
     {
         depth_sub = this->create_subscription<sensor_msgs::msg::Image>(
             "/camera/camera_depth/depth/image_raw",
-            rclcpp::SensorDataQoS(),
+            rclcpp::QoS(rclcpp::KeepLast(20)).best_effort().durability_volatile(),
             std::bind(&RealsenseBridge::depth_callback,this,std::placeholders::_1)
         );
         depth_pub = this->create_publisher<std_msgs::msg::Float32>(
             "object_depth",   
-            10                
+            rclcpp::QoS(rclcpp::KeepLast(20)).best_effort().durability_volatile()       
         );
         pixel_xy_sub = this->create_subscription<geometry_msgs::msg::Point>(
             "pixel_xy",
@@ -31,24 +31,24 @@ public:
 private:
     void depth_callback(const sensor_msgs::msg::Image::SharedPtr msg)
     {
-        if (!pixel_received) return;
         cv_bridge::CvImagePtr cv_ptr;
         cv_ptr = cv_bridge::toCvCopy(msg, sensor_msgs::image_encodings::TYPE_16UC1);
         cv::Mat depth_img = cv_ptr->image;
         uint16_t depth_raw = depth_img.at<uint16_t>(cy, cx);
         if (depth_raw == 0) {
+            RCLCPP_WARN(this->get_logger(), "Depth 값이 0 (유효하지 않음)");
             return;
         }
+
         float depth_m = static_cast<float>(depth_raw) * 0.001f;
         depth_publish(depth_m);
         RCLCPP_INFO(this->get_logger(), "Depth (m): %.3f", depth_m);
-        pixel_received = false;
     }
 
     void pixel_callback(const geometry_msgs::msg::Point::SharedPtr msg){
         cx = msg->x;
         cy = msg->y;
-        pixel_received = true;
+        RCLCPP_INFO(this->get_logger(), "pixel _call back Depth (m): %.3f %.3f", cx,cy);
     }
 
     void depth_publish(const float depth_m){

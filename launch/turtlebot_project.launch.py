@@ -33,24 +33,24 @@ def generate_launch_description():
                     name='cmd_vel_bridge',       
                     output='screen'
                 ),
-                Node(
-                    package='turtlebot_project',           
-                    executable='realsense_bridge',     
-                    name='realsense_bridge',       
-                    output='screen'
-                ),
-                IncludeLaunchDescription(
-                    PythonLaunchDescriptionSource([
-                        PathJoinSubstitution([
-                            FindPackageShare('yolo_bringup'),
-                            'launch',
-                            'yolov5.launch.py'
-                        ])
-                    ]),
-                    launch_arguments={
-                        'input_image_topic': '/camera/camera_color/image_raw'
-                    }.items(),
-                ),
+                # Node(
+                #     package='turtlebot_project',           
+                #     executable='realsense_bridge',     
+                #     name='realsense_bridge',       
+                #     output='screen'
+                # ),
+                # IncludeLaunchDescription(
+                #     PythonLaunchDescriptionSource([
+                #         PathJoinSubstitution([
+                #             FindPackageShare('yolo_bringup'),
+                #             'launch',
+                #             'yolov5.launch.py'
+                #         ])
+                #     ]),
+                #     launch_arguments={
+                #         'input_image_topic': '/camera/camera_color/image_raw'
+                #     }.items(),
+                # ),
             ]
         ),
         TimerAction(
