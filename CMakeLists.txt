@@ -14,10 +14,9 @@ find_package(geometry_msgs REQUIRED)
 find_package(cv_bridge REQUIRED)        
 find_package(image_transport REQUIRED) 
 find_package(tf2_ros REQUIRED)
-
-set(CMAKE_AUTOMOC ON)
-set(CMAKE_AUTORCC ON)
-set(CMAKE_AUTOUIC ON)
+find_package(nav2_msgs REQUIRED)
+find_package(rclcpp_action REQUIRED)
+find_package(nlohmann_json REQUIRED)
 
 add_executable(cmd_vel_bridge src/cmd_vel_bridge.cpp)
 ament_target_dependencies(cmd_vel_bridge rclcpp geometry_msgs)
@@ -32,13 +31,22 @@ ament_target_dependencies(realsense_bridge
   std_msgs
 )
 add_executable(static_tf_bridge src/static_tf_bridge.cpp)
-ament_target_dependencies(static_tf_bridge rclcpp geometry_msgs tf2_ros )
+ament_target_dependencies(static_tf_bridge rclcpp std_msgs tf2_ros )
 
-
+add_executable(task_node src/task_node.cpp)
+ament_target_dependencies(task_node
+  rclcpp
+  rclcpp_action
+  geometry_msgs
+  std_msgs
+  nav2_msgs
+)
+target_link_libraries(task_node nlohmann_json::nlohmann_json)
 install(TARGETS
   cmd_vel_bridge
   realsense_bridge 
   static_tf_bridge
+  task_node
   DESTINATION lib/${PROJECT_NAME}
   )
 
