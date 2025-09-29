@@ -29,6 +29,9 @@ public:
             "/amcl_pose", 10,
             std::bind(&NavTaskNode::amcl_callback, this, std::placeholders::_1)
         );
+
+        initialpose_pub_ = this->create_publisher<geometry_msgs::msg::PoseWithCovarianceStamped>(
+            "/initialpose", 10);
     }
 private:
     void task_callback(const std_msgs::msg::String::SharedPtr msg){
@@ -68,19 +71,23 @@ private:
         if (goal_in_progress_ || task_queue_.empty()) {
             return;  
         }
-        Task next = task_queue_.front();
-        task_queue_.pop_front();
-
-        auto goal_msg = NavigateToPose::Goal();
-        goal_msg.pose.header.frame_id = "map";
-        goal_msg.pose.header.stamp = this->get_clock()->now();
-        goal_msg.pose.pose.position.x = next.x;
-        goal_msg.pose.pose.position.y = next.y;
-        goal_msg.pose.pose.position.z = next.z;
-        goal_msg.pose.pose.orientation.x = next.qx;
-        goal_msg.pose.pose.orientation.y = next.qy;
-        goal_msg.pose.pose.orientation.z = next.qz;
-        goal_msg.pose.pose.orientation.w = next.qw;
+        
+        if(initial_){
+            initial_ = false;
+        }else{
+            Task next = task_queue_.front();
+            task_queue_.pop_front();
+            current_goal_msg = NavigateToPose::Goal();
+            current_goal_msg.pose.header.frame_id = "map";
+            current_goal_msg.pose.header.stamp = this->get_clock()->now();
+            current_goal_msg.pose.pose.position.x = next.x;
+            current_goal_msg.pose.pose.position.y = next.y;
+            current_goal_msg.pose.pose.position.z = next.z;
+            current_goal_msg.pose.pose.orientation.x = next.qx;
+            current_goal_msg.pose.pose.orientation.y = next.qy;
+            current_goal_msg.pose.pose.orientation.z = next.qz;
+            current_goal_msg.pose.pose.orientation.w = next.qw;
+        }
         goal_in_progress_ = true;
         auto send_goal_options = rclcpp_action::Client<NavigateToPose>::SendGoalOptions();
         send_goal_options.result_callback =
@@ -102,7 +109,7 @@ private:
                 }
                 send_task_goal();
             };
-        nav_to_pose_client->async_send_goal(goal_msg, send_goal_options);
+        nav_to_pose_client->async_send_goal(current_goal_msg, send_goal_options);
     }
 
     void amcl_callback(const geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr msg) {
@@ -128,14 +135,30 @@ private:
         double dx = std::fabs(current_x - last_valid_pose_->position.x);
         double dy = std::fabs(current_y - last_valid_pose_->position.y);
         RCLCPP_INFO(this->get_logger(), "📍 dx 위치 변화 (%.2f m)", std::fabs(dx));
-        RCLCPP_INFO(this->get_logger(), "📍 dx 위치 변화 (%.2f m)", std::fabs(dy));
+        RCLCPP_INFO(this->get_logger(), "📍 dy 위치 변화 (%.2f m)", std::fabs(dy));
         if(dx > 0.6 || dy > 0.6){
             if (goal_in_progress_ && nav_goal_handle_) {
                 auto future_cancel = nav_to_pose_client->async_cancel_goal(nav_goal_handle_);
                 goal_in_progress_ = false; 
+                init_pose();
+                initial_ = true;
+                send_task_goal();
             }
+            return;
         }
         last_valid_pose_ = current_amcl_pose_;
+    }
+
+    void init_pose(){
+        geometry_msgs::msg::PoseWithCovarianceStamped init_pose;
+        init_pose.header.stamp = this->get_clock()->now();
+        init_pose.header.frame_id = "map";  
+        init_pose.pose.pose = *last_valid_pose_;
+        init_pose.pose.covariance.fill(0.0);
+        init_pose.pose.covariance[0] = 0.25;   
+        init_pose.pose.covariance[7] = 0.25;  
+        init_pose.pose.covariance[35] = 0.068; 
+        initialpose_pub_->publish(init_pose);
     }
 
     std::deque<Task> task_queue_;
@@ -143,9 +166,13 @@ private:
     rclcpp::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr amcl_sub_;
     rclcpp_action::Client<NavigateToPose>::SharedPtr nav_to_pose_client;
     rclcpp_action::ClientGoalHandle<NavigateToPose>::SharedPtr nav_goal_handle_;
+    rclcpp::Publisher<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr initialpose_pub_;
     bool goal_in_progress_{false};
     std::optional<geometry_msgs::msg::Pose> current_amcl_pose_;
     std::optional<geometry_msgs::msg::Pose> last_valid_pose_;
+    NavigateToPose::Goal current_goal_msg;
+    bool initial_{false};
+    
 };
 
 int main(int argc, char **argv) {
