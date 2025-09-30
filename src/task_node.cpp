@@ -2,6 +2,7 @@
 #include "rclcpp_action/rclcpp_action.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "std_msgs/msg/string.hpp"
+#include "std_msgs/msg/int32.hpp"
 #include <nlohmann/json.hpp>
 #include <deque>
 #include <string>
@@ -40,13 +41,21 @@ public:
             "/object_info", 10,
             std::bind(&NavTaskNode::object_callback, this, std::placeholders::_1)
         );
+
+        current_zone_index_pub_ = this->create_publisher<std_msgs::msg::Int32>(
+            "/current_zone_index",
+            10
+        );
+
     }
 private:
     void task_callback(const std_msgs::msg::String::SharedPtr msg){
         try {
             auto j = json::parse(msg->data);
-            std::string robot = j["robot_name"]; //
+            std::string robot = j["robot_name"]; //네임스페이스 사용시
             auto tasks = j["tasks"];
+            total_steps += tasks.size();
+            RCLCPP_INFO(this->get_logger(), "total_steps = %d:" , total_steps);
             for (auto &t : tasks) {
                 Task task;
                 task.x = t["pose"]["position"]["x"];
@@ -58,16 +67,6 @@ private:
                 task.qw = t["pose"]["orientation"]["w"];
                 
                 task_queue_.push_back(task);
-                RCLCPP_INFO(this->get_logger(), "Task position:");
-                RCLCPP_INFO(this->get_logger(), "  x = %.3f", task.x);
-                RCLCPP_INFO(this->get_logger(), "  y = %.3f", task.y);
-                RCLCPP_INFO(this->get_logger(), "  z = %.3f", task.z);
-
-                RCLCPP_INFO(this->get_logger(), "Task orientation:");
-                RCLCPP_INFO(this->get_logger(), "  qx = %.3f", task.qx);
-                RCLCPP_INFO(this->get_logger(), "  qy = %.3f", task.qy);
-                RCLCPP_INFO(this->get_logger(), "  qz = %.3f", task.qz);
-                RCLCPP_INFO(this->get_logger(), "  qw = %.3f", task.qw);
             }
             send_task_goal();
         } catch (std::exception &e) {
@@ -77,17 +76,19 @@ private:
 
     void send_task_goal(){
         if (goal_in_progress_ || task_queue_.empty()) {
-            RCLCPP_INFO(this->get_logger(), "goal_in_progress_ true라 막힘");
             return;  
         }
-        
         if(initial_){
             initial_ = false;
-            RCLCPP_INFO(this->get_logger(), "initial_.");
         }else{
-            RCLCPP_INFO(this->get_logger(), "Task");
             Task next = task_queue_.front();
             task_queue_.pop_front();
+            int current_index = total_steps - task_queue_.size() - 1;
+            current_index_publish(current_index);
+            RCLCPP_INFO(this->get_logger(), "current_index = %d:" , current_index);
+            RCLCPP_INFO(this->get_logger(), "total_steps = %d:" , total_steps);
+            RCLCPP_INFO(this->get_logger(), "task_queue_ = %d:" , task_queue_.size());
+
             current_goal_msg = NavigateToPose::Goal();
             current_goal_msg.pose.header.frame_id = "map";
             current_goal_msg.pose.header.stamp = this->get_clock()->now();
@@ -203,21 +204,28 @@ private:
         initial_ = true;
     }
 
-    std::deque<Task> task_queue_;
+    void current_index_publish(const int current_index){
+        std_msgs::msg::Int32 msg;
+        msg.data = current_index;
+        current_zone_index_pub_->publish(msg);
+    }
+
+    std::deque<Task> task_queue_; // 태스크 큐 
     rclcpp::Subscription<std_msgs::msg::String>::SharedPtr task_sub_;
     rclcpp::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr amcl_sub_;
     rclcpp_action::Client<NavigateToPose>::SharedPtr nav_to_pose_client;
     rclcpp_action::ClientGoalHandle<NavigateToPose>::SharedPtr nav_goal_handle_;
     rclcpp::Publisher<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr initialpose_pub_;
-    bool goal_in_progress_{false};
+    bool goal_in_progress_{false}; // nav 주행 상태
     std::optional<geometry_msgs::msg::Pose> current_amcl_pose_;
-    std::optional<geometry_msgs::msg::Pose> last_valid_pose_;
-    NavigateToPose::Goal current_goal_msg;
+    std::optional<geometry_msgs::msg::Pose> last_valid_pose_; // amcl 비교 전 좌표
+    NavigateToPose::Goal current_goal_msg; // 
     rclcpp::Subscription<yolo_msgs::msg::BoundingBoxDepth>::SharedPtr object_sub_;
-    bool initial_{false};
-    bool paused_for_person_{false};
-    rclcpp::Time last_person_detect_time_{0, 0, RCL_ROS_TIME};
-    
+    bool initial_{false}; // amcl 초기 위치 다시 설정 flag
+    bool paused_for_person_{false}; // 사람 감지 flag
+    rclcpp::Time last_person_detect_time_{0, 0, RCL_ROS_TIME}; // 사람 감지시 멈춤 시간
+    int total_steps; //task total 사이즈
+    rclcpp::Publisher<std_msgs::msg::Int32>::SharedPtr current_zone_index_pub_;
 };
 
 int main(int argc, char **argv) {
