@@ -5,7 +5,10 @@
 #include <nlohmann/json.hpp>
 #include <deque>
 #include <string>
+#include <chrono>
 #include "geometry_msgs/msg/pose_with_covariance_stamped.hpp"
+#include "yolo_msgs/msg/bounding_box_depth.hpp"
+
 using json = nlohmann::json;
 struct Task {
   double x, y, z;
@@ -32,6 +35,11 @@ public:
 
         initialpose_pub_ = this->create_publisher<geometry_msgs::msg::PoseWithCovarianceStamped>(
             "/initialpose", 10);
+
+        object_sub_ = this->create_subscription<yolo_msgs::msg::BoundingBoxDepth>(
+            "/object_info", 10,
+            std::bind(&NavTaskNode::object_callback, this, std::placeholders::_1)
+        );
     }
 private:
     void task_callback(const std_msgs::msg::String::SharedPtr msg){
@@ -69,12 +77,15 @@ private:
 
     void send_task_goal(){
         if (goal_in_progress_ || task_queue_.empty()) {
+            RCLCPP_INFO(this->get_logger(), "goal_in_progress_ true라 막힘");
             return;  
         }
         
         if(initial_){
             initial_ = false;
+            RCLCPP_INFO(this->get_logger(), "initial_.");
         }else{
+            RCLCPP_INFO(this->get_logger(), "Task");
             Task next = task_queue_.front();
             task_queue_.pop_front();
             current_goal_msg = NavigateToPose::Goal();
@@ -90,24 +101,34 @@ private:
         }
         goal_in_progress_ = true;
         auto send_goal_options = rclcpp_action::Client<NavigateToPose>::SendGoalOptions();
+        send_goal_options.goal_response_callback =
+            [this](std::shared_ptr<GoalHandleN2P> goal_handle) {
+                if (!goal_handle) {
+                    RCLCPP_ERROR(this->get_logger(), "❌ Nav2에서 Goal이 거부되었습니다.");
+                    nav_goal_handle_.reset();
+                } else {
+                    RCLCPP_INFO(this->get_logger(), "✅ Nav2에서 Goal이 수락되었습니다.");
+                    nav_goal_handle_ = goal_handle;
+                }
+            };
         send_goal_options.result_callback =
             [this](const GoalHandleN2P::WrappedResult &result) {
                 goal_in_progress_ = false;
                 switch (result.code) {
                     case rclcpp_action::ResultCode::SUCCEEDED:
-                        RCLCPP_INFO(this->get_logger(), "✅ Goal succeeded!");
+                        RCLCPP_INFO(this->get_logger(), "✅ 목표에 도달했습니다!");
+                        send_task_goal();
                         break;
                     case rclcpp_action::ResultCode::ABORTED:
-                        RCLCPP_WARN(this->get_logger(), "⚠️ Goal aborted by Nav2");
+                        RCLCPP_WARN(this->get_logger(), "⚠️ Nav2에서 목표가 중단되었습니다.");
                         break;
                     case rclcpp_action::ResultCode::CANCELED:
-                        RCLCPP_WARN(this->get_logger(), "⚠️ Goal canceled");
+                        RCLCPP_WARN(this->get_logger(), "⚠️ 목표가 취소되었습니다.");
                         break;
                     default:
-                        RCLCPP_ERROR(this->get_logger(), "Unknown result code");
+                        RCLCPP_ERROR(this->get_logger(), "알 수 없는 결과 코드입니다.");
                         break;
                 }
-                send_task_goal();
             };
         nav_to_pose_client->async_send_goal(current_goal_msg, send_goal_options);
     }
@@ -125,23 +146,14 @@ private:
         double qy = msg->pose.pose.orientation.y;
         double qz = msg->pose.pose.orientation.z;
         double qw = msg->pose.pose.orientation.w;
-        RCLCPP_INFO(this->get_logger(),
-            "📍 AMCL Pose:\n"
-            "  Position -> x=%.3f, y=%.3f, z=%.3f\n"
-            "  Orientation -> qx=%.3f, qy=%.3f, qz=%.3f, qw=%.3f",
-            current_x, current_y, current_z,
-            qx, qy, qz, qw
-        );
+
         double dx = std::fabs(current_x - last_valid_pose_->position.x);
         double dy = std::fabs(current_y - last_valid_pose_->position.y);
         RCLCPP_INFO(this->get_logger(), "📍 dx 위치 변화 (%.2f m)", std::fabs(dx));
         RCLCPP_INFO(this->get_logger(), "📍 dy 위치 변화 (%.2f m)", std::fabs(dy));
         if(dx > 0.6 || dy > 0.6){
             if (goal_in_progress_ && nav_goal_handle_) {
-                auto future_cancel = nav_to_pose_client->async_cancel_goal(nav_goal_handle_);
-                goal_in_progress_ = false; 
-                init_pose();
-                initial_ = true;
+                pause_nav();
                 send_task_goal();
             }
             return;
@@ -161,6 +173,36 @@ private:
         initialpose_pub_->publish(init_pose);
     }
 
+    void object_callback(const yolo_msgs::msg::BoundingBoxDepth::SharedPtr msg){
+        std::string cls = msg->class_name;
+        auto now = this->get_clock()->now();
+        if(cls == "person"){
+            last_person_detect_time_ = now;
+            if(!paused_for_person_){
+                pause_nav();
+                paused_for_person_ = true;
+                RCLCPP_INFO(this->get_logger(), "❌ 사람 사라짐 →  네비 취소");
+            }
+        }else{
+            if (paused_for_person_ && (now - last_person_detect_time_).seconds() > 5.0) 
+            {
+                paused_for_person_ = false;
+                send_task_goal();
+                RCLCPP_INFO(this->get_logger(), "✅ 사람 사라짐 → 네비 재개");
+            }
+        }
+    }
+
+    void pause_nav(){
+        if(!goal_in_progress_){
+            return;
+        }
+        auto future_cancel = nav_to_pose_client->async_cancel_goal(nav_goal_handle_);
+        goal_in_progress_ = false; 
+        init_pose();
+        initial_ = true;
+    }
+
     std::deque<Task> task_queue_;
     rclcpp::Subscription<std_msgs::msg::String>::SharedPtr task_sub_;
     rclcpp::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr amcl_sub_;
@@ -171,7 +213,10 @@ private:
     std::optional<geometry_msgs::msg::Pose> current_amcl_pose_;
     std::optional<geometry_msgs::msg::Pose> last_valid_pose_;
     NavigateToPose::Goal current_goal_msg;
+    rclcpp::Subscription<yolo_msgs::msg::BoundingBoxDepth>::SharedPtr object_sub_;
     bool initial_{false};
+    bool paused_for_person_{false};
+    rclcpp::Time last_person_detect_time_{0, 0, RCL_ROS_TIME};
     
 };
 

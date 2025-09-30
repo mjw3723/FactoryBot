@@ -17,6 +17,7 @@ find_package(tf2_ros REQUIRED)
 find_package(nav2_msgs REQUIRED)
 find_package(rclcpp_action REQUIRED)
 find_package(nlohmann_json REQUIRED)
+find_package(yolo_msgs REQUIRED)
 
 add_executable(cmd_vel_bridge src/cmd_vel_bridge.cpp)
 ament_target_dependencies(cmd_vel_bridge rclcpp geometry_msgs)
@@ -40,6 +41,7 @@ ament_target_dependencies(task_node
   geometry_msgs
   std_msgs
   nav2_msgs
+  yolo_msgs
 )
 target_link_libraries(task_node nlohmann_json::nlohmann_json)
 install(TARGETS
