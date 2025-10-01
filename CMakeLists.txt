@@ -19,6 +19,13 @@ find_package(rclcpp_action REQUIRED)
 find_package(nlohmann_json REQUIRED)
 find_package(yolo_msgs REQUIRED)
 
+find_package(rosidl_default_generators REQUIRED)
+
+rosidl_generate_interfaces(${PROJECT_NAME}
+  "msg/TaskResult.msg"
+  DEPENDENCIES std_msgs 
+)
+
 add_executable(cmd_vel_bridge src/cmd_vel_bridge.cpp)
 ament_target_dependencies(cmd_vel_bridge rclcpp geometry_msgs)
 
@@ -44,6 +51,10 @@ ament_target_dependencies(task_node
   yolo_msgs
 )
 target_link_libraries(task_node nlohmann_json::nlohmann_json)
+
+rosidl_get_typesupport_target(cpp_typesupport_target ${PROJECT_NAME} "rosidl_typesupport_cpp")
+target_link_libraries(task_node "${cpp_typesupport_target}")
+
 install(TARGETS
   cmd_vel_bridge
   realsense_bridge 
@@ -51,6 +62,8 @@ install(TARGETS
   task_node
   DESTINATION lib/${PROJECT_NAME}
   )
+
+
 
 install(DIRECTORY launch
   DESTINATION share/${PROJECT_NAME}/

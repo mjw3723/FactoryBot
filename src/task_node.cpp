@@ -6,14 +6,17 @@
 #include <nlohmann/json.hpp>
 #include <deque>
 #include <string>
+#include <vector>
 #include <chrono>
 #include "geometry_msgs/msg/pose_with_covariance_stamped.hpp"
+#include "turtlebot_project/msg/task_result.hpp"
 #include "yolo_msgs/msg/bounding_box_depth.hpp"
 
 using json = nlohmann::json;
 struct Task {
-  double x, y, z;
-  double qx, qy, qz, qw;
+    std::string poseName;
+    double x, y, z;
+    double qx, qy, qz, qw;
 };
 class NavTaskNode : public rclcpp::Node {
 public:
@@ -46,7 +49,11 @@ public:
             "/current_zone_index",
             10
         );
-
+        
+        task_sec_pub_ = this->create_publisher<turtlebot_project::msg::TaskResult>(
+            "/task_result",
+            10
+        );
     }
 private:
     void task_callback(const std_msgs::msg::String::SharedPtr msg){
@@ -54,19 +61,23 @@ private:
             auto j = json::parse(msg->data);
             std::string robot = j["robot_name"]; //네임스페이스 사용시
             auto tasks = j["tasks"];
+            auto poseNames = j["poseNames"];
             total_steps += tasks.size();
             RCLCPP_INFO(this->get_logger(), "total_steps = %d:" , total_steps);
-            for (auto &t : tasks) {
+            for (size_t i = 0; i < tasks.size(); i++) {
                 Task task;
-                task.x = t["pose"]["position"]["x"];
-                task.y = t["pose"]["position"]["y"];
-                task.z = t["pose"]["position"]["z"];
-                task.qx = t["pose"]["orientation"]["x"];
-                task.qy = t["pose"]["orientation"]["y"];
-                task.qz = t["pose"]["orientation"]["z"];
-                task.qw = t["pose"]["orientation"]["w"];
-                
+                task.poseName = poseNames[i].get<std::string>();   
+                task.x  = tasks[i]["pose"]["position"]["x"];
+                task.y  = tasks[i]["pose"]["position"]["y"];
+                task.z  = tasks[i]["pose"]["position"]["z"];
+                task.qx = tasks[i]["pose"]["orientation"]["x"];
+                task.qy = tasks[i]["pose"]["orientation"]["y"];
+                task.qz = tasks[i]["pose"]["orientation"]["z"];
+                task.qw = tasks[i]["pose"]["orientation"]["w"];
                 task_queue_.push_back(task);
+                RCLCPP_INFO(this->get_logger(),
+                    "Task %s: (%.2f, %.2f, %.2f)", 
+                    task.poseName.c_str(), task.x, task.y, task.z);
             }
             send_task_goal();
         } catch (std::exception &e) {
@@ -81,14 +92,13 @@ private:
         if(initial_){
             initial_ = false;
         }else{
+            if(task_count_ == 0 ){
+                set_start_time_ = this->get_clock()->now();
+            }
             Task next = task_queue_.front();
             task_queue_.pop_front();
             int current_index = total_steps - task_queue_.size() - 1;
             current_index_publish(current_index);
-            RCLCPP_INFO(this->get_logger(), "current_index = %d:" , current_index);
-            RCLCPP_INFO(this->get_logger(), "total_steps = %d:" , total_steps);
-            RCLCPP_INFO(this->get_logger(), "task_queue_ = %d:" , task_queue_.size());
-
             current_goal_msg = NavigateToPose::Goal();
             current_goal_msg.pose.header.frame_id = "map";
             current_goal_msg.pose.header.stamp = this->get_clock()->now();
@@ -99,6 +109,7 @@ private:
             current_goal_msg.pose.pose.orientation.y = next.qy;
             current_goal_msg.pose.pose.orientation.z = next.qz;
             current_goal_msg.pose.pose.orientation.w = next.qw;
+            task_poses.push_back(next.poseName);
         }
         goal_in_progress_ = true;
         auto send_goal_options = rclcpp_action::Client<NavigateToPose>::SendGoalOptions();
@@ -118,6 +129,7 @@ private:
                 switch (result.code) {
                     case rclcpp_action::ResultCode::SUCCEEDED:
                         RCLCPP_INFO(this->get_logger(), "✅ 목표에 도달했습니다!");
+                        check_task_sec();
                         send_task_goal();
                         break;
                     case rclcpp_action::ResultCode::ABORTED:
@@ -162,6 +174,26 @@ private:
         last_valid_pose_ = current_amcl_pose_;
     }
 
+    void check_task_sec(){
+        task_count_++;
+        if(task_count_ == 3){
+            auto set_end_time = this->get_clock()->now();
+            double sec = (set_end_time - set_start_time_).seconds();
+            task_sec_publish(sec);
+            task_poses.clear();
+            task_count_ = 0;
+        }
+    }
+
+    void task_sec_publish(const double sec){
+        turtlebot_project::msg::TaskResult msg;
+        for(size_t i = 0 ; i< task_poses.size(); i++){
+            msg.pose_names.push_back(task_poses[i]);
+        }
+        msg.duration = sec;
+        task_sec_pub_->publish(msg);
+    }
+
     void init_pose(){
         geometry_msgs::msg::PoseWithCovarianceStamped init_pose;
         init_pose.header.stamp = this->get_clock()->now();
@@ -176,22 +208,22 @@ private:
 
     void object_callback(const yolo_msgs::msg::BoundingBoxDepth::SharedPtr msg){
         std::string cls = msg->class_name;
-        auto now = this->get_clock()->now();
-        if(cls == "person"){
-            last_person_detect_time_ = now;
-            if(!paused_for_person_){
-                pause_nav();
-                paused_for_person_ = true;
-                RCLCPP_INFO(this->get_logger(), "❌ 사람 사라짐 →  네비 취소");
-            }
-        }else{
-            if (paused_for_person_ && (now - last_person_detect_time_).seconds() > 5.0) 
-            {
-                paused_for_person_ = false;
-                send_task_goal();
-                RCLCPP_INFO(this->get_logger(), "✅ 사람 사라짐 → 네비 재개");
-            }
-        }
+        // auto now = this->get_clock()->now();
+        // if(cls == "person"){
+        //     last_person_detect_time_ = now;
+        //     if(!paused_for_person_){
+        //         pause_nav();
+        //         paused_for_person_ = true;
+        //         RCLCPP_INFO(this->get_logger(), "❌ 사람 사라짐 →  네비 취소");
+        //     }
+        // }else{
+        //     if (paused_for_person_ && (now - last_person_detect_time_).seconds() > 5.0) 
+        //     {
+        //         paused_for_person_ = false;
+        //         send_task_goal();
+        //         RCLCPP_INFO(this->get_logger(), "✅ 사람 사라짐 → 네비 재개");
+        //     }
+        // }
     }
 
     void pause_nav(){
@@ -203,7 +235,7 @@ private:
         init_pose();
         initial_ = true;
     }
-
+ 
     void current_index_publish(const int current_index){
         std_msgs::msg::Int32 msg;
         msg.data = current_index;
@@ -226,6 +258,11 @@ private:
     rclcpp::Time last_person_detect_time_{0, 0, RCL_ROS_TIME}; // 사람 감지시 멈춤 시간
     int total_steps; //task total 사이즈
     rclcpp::Publisher<std_msgs::msg::Int32>::SharedPtr current_zone_index_pub_;
+    rclcpp::Publisher<turtlebot_project::msg::TaskResult>::SharedPtr task_sec_pub_;
+    rclcpp::Time set_start_time_;
+    int task_count_ = 0;
+    std::vector<std::string> task_poses;
+    
 };
 
 int main(int argc, char **argv) {
